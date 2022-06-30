@@ -51,6 +51,7 @@ class Engine(engine.Engine):
     Returns:
       A FuzzOptions object.
     """
+    logs.log("### all things" + str(corpus_dir) + " : " + str(target_path) + " : " + str(build_dir))
     afl_config = launcher.AflConfig.from_target_path(target_path)
     arguments = afl_config.additional_afl_arguments
     # TODO(mbarbella): Select all strategies here instead of deferring to fuzz.
@@ -89,11 +90,19 @@ class Engine(engine.Engine):
 
     fuzz_result = runner.fuzz()
 
+    import time
+    logs.log("### DONE FUZZING")
+    import time
+    time.sleep(1)
+
     command = fuzz_result.command
     time_executed = fuzz_result.time_executed
     fuzzing_logs = fuzz_result.output + runner.fuzzer_stderr
 
     # Bail out if AFL returns a nonzero status code.
+    logs.log("### FUZZ RESULT: " + str(vars(fuzz_result)))
+
+    time.sleep(1)
     if fuzz_result.return_code:
       target = engine_common.get_project_qualified_fuzzer_name(target_path)
       logs.log_error(
@@ -103,17 +112,25 @@ class Engine(engine.Engine):
 
     stats_getter = stats.StatsGetter(runner.afl_output.stats_path,
                                      config.dict_path)
+
+    logs.log("### GOT stats")
     new_units_generated, new_units_added, corpus_size = (
         runner.libfuzzerize_corpus())
+
+    logs.log("### LIBFUZZERIZE")
+
     stats_getter.set_stats(fuzz_result.time_executed, new_units_generated,
                            new_units_added, corpus_size, runner.strategies,
                            runner.fuzzer_stderr, fuzz_result.output)
 
+    logs.log("### GOT set stats")
+    logs.log("### CRASHES: " + testcase_file_path)
     crashes = []
     if os.path.exists(testcase_file_path):
       crash = engine.Crash(testcase_file_path, runner.fuzzer_stderr, [],
                            fuzz_result.time_executed)
       crashes.append(crash)
+      logs.log("### ALL CRASHES: " + str(vars(crash)))
 
     return engine.FuzzResult(fuzzing_logs, command, crashes, stats_getter.stats,
                              time_executed)
@@ -132,6 +149,7 @@ class Engine(engine.Engine):
     """
     del arguments
     del max_time
+    logs.log("### REPROOOOO !!!")
     config = launcher.AflConfig.from_target_path(target_path)
     input_directory = None  # Not required for reproduction.
     runner = launcher.prepare_runner(target_path, config, input_path,

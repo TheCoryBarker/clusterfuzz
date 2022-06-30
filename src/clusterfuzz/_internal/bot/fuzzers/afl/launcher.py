@@ -45,6 +45,7 @@ from clusterfuzz._internal.bot.fuzzers.afl.fuzzer import write_dummy_file
 from clusterfuzz._internal.datastore import data_types
 from clusterfuzz._internal.fuzzing import strategy
 from clusterfuzz._internal.metrics import logs
+from clusterfuzz._internal.platforms import android
 from clusterfuzz._internal.metrics import profiler
 from clusterfuzz._internal.system import environment
 from clusterfuzz._internal.system import minijail
@@ -211,6 +212,8 @@ class AflFuzzOutputDirectory(object):
     """Copy the first crash found by AFL to |testcase_path| (the input file
     created by run.py).
     """
+    logs.log("### testcase_path : " + testcase_path)
+
     crash_paths = list_full_file_paths(
         os.path.join(self.instance_directory, 'crashes'))
 
@@ -238,6 +241,21 @@ class AflFuzzOutputDirectory(object):
   def stats_path(self):
     """Returns the path of AFL's stats file: "fuzzer_stats"."""
     return os.path.join(self.instance_directory, 'fuzzer_stats')
+
+
+class AflAndroidFuzzOutputDirectory(AflFuzzOutputDirectory):
+  def copy_crash_if_needed(self, testcase_path):
+    logs.log("Copying crash directory from device to local")
+
+    # copy the crashes dir from device to local
+    local_directory = os.path.join(self.instance_directory, 'crashes')
+    device_directory = android.util.get_device_path(local_directory)
+
+    shell.remove_directory(local_directory, recreate=True)
+    android.adb.copy_remote_directory_to_local(device_directory, local_directory)
+
+    #call base method
+    super().copy_crash_if_needed(testcase_path)
 
 
 class FuzzingStrategies(object):
@@ -404,6 +422,11 @@ class AflRunnerCommon(object):
   # Time to wait for SIGTERM handler.
   SIGTERM_WAIT_TIME = 10.0
 
+  # Time to remove from timeout for on device fuzzing
+  # NOTE: if run_and_wait times out before afl on device process it will return
+  # and error code
+  ON_DEVICE_FUZZING_TIME_DIFF = 10.0
+
   # Maximum number of times we will retry fuzzing after fixing an issue.
   MAX_FUZZ_RETRIES = 40
 
@@ -519,6 +542,7 @@ class AflRunnerCommon(object):
     expects to execute.
     """
     if self._fuzzer_stderr is not None:
+      logs.log("### I guess we have the ST already " + self._fuzzer_stderr)
       return self._fuzzer_stderr
 
     try:
@@ -528,7 +552,10 @@ class AflRunnerCommon(object):
 
       self._fuzzer_stderr = get_first_stacktrace(stderr_data)
     except IOError:
+      logs.log("### IO EXCEPTION")
       self._fuzzer_stderr = ''
+
+    logs.log("### Stack Trace HERERERER: " + self._fuzzer_stderr)
     return self._fuzzer_stderr
 
   def run_single_testcase(self, testcase_path):
@@ -540,6 +567,8 @@ class AflRunnerCommon(object):
     Returns:
       A new_process.ProcessResult.
     """
+
+    logs.log("### REALLY HERE !!!")
     self._executable_path = self.target_path
 
     assert not testcase_path.isdigit(), ('We don\'t want to specify number of'
@@ -575,6 +604,12 @@ class AflRunnerCommon(object):
     """
     self.set_environment_variables()
     remove_path(self.stderr_file_path)
+
+  def set_afl_fuzz_executable(self):
+    self._executable_path = self.afl_fuzz_path
+
+  def set_afl_showmap_executable(self):
+    self._executable_path = self.afl_showmap_path
 
   @staticmethod
   def set_resume(afl_args):
@@ -655,9 +690,12 @@ class AflRunnerCommon(object):
       if os.path.getsize(input_path) >= constants.MAX_FILE_BYTES:
         remove_path(input_path)
 
+  #TODO -- CORY verify generate_afl_args is not broken anywhere after change
   def generate_afl_args(self,
                         afl_input=None,
                         afl_output=None,
+                        target_path=None,
+                        additional_args=[],
                         mem_limit=constants.MAX_MEMORY_LIMIT):
     """Generate arguments to pass to Process.run_and_wait.
 
@@ -668,6 +706,10 @@ class AflRunnerCommon(object):
       afl_output: Output directory where afl stores corpus and stats, passed as
       -o parameter to the afl tool. Defaults to
       self.afl_output.output_directory.
+
+      target_path: Path to afl fuzz target. Defaults to self.target_path
+
+      additional_args: Additional AFL arguments
 
       mem_limit: Virtual memory limit afl enforces on target binary, passed as
       -m parameter to the afl tool. Defaults to constants.MAX_MEMORY_LIMIT.
@@ -684,16 +726,20 @@ class AflRunnerCommon(object):
     if afl_output is None:
       afl_output = self.afl_output.output_directory
 
+    if target_path is None:
+      target_path = self.target_path
+
     afl_args = [
         constants.INSTANCE_ID_FLAG + constants.DEFAULT_INSTANCE_ID,
-        constants.INPUT_FLAG + afl_input, constants.OUTPUT_FLAG + afl_output,
+        constants.INPUT_FLAG + afl_input,
+        constants.OUTPUT_FLAG + afl_output,
         constants.MEMORY_LIMIT_FLAG + str(mem_limit)
-    ]
+    ] + additional_args
 
     afl_args.extend(self.config.additional_afl_arguments)
 
     afl_args.extend(
-        [self.target_path,
+        [target_path,
          str(self.config.num_persistent_executions)])
 
     return afl_args
@@ -819,7 +865,8 @@ class AflRunnerCommon(object):
           additional_args=fuzz_args,
           timeout=max_total_time,
           terminate_before_kill=True,
-          terminate_wait_time=self.SIGTERM_WAIT_TIME)
+          terminate_wait_time=self.SIGTERM_WAIT_TIME
+      )
 
       # Reduce max_total_time by the amount of time the last attempt took.
       max_total_time -= fuzz_result.time_executed
@@ -957,7 +1004,7 @@ class AflRunnerCommon(object):
       A new_process.ProcessResult.
     """
     # Ensure self.executable_path is afl-fuzz
-    self._executable_path = self.afl_fuzz_path
+    self.set_afl_fuzz_executable()
 
     self.initial_max_total_time = (
         get_fuzz_timeout(
@@ -977,9 +1024,10 @@ class AflRunnerCommon(object):
     afl-showmap."""
     # TODO(metzman): Figure out if we should worry about CPU affinity errors
     # here.
+
+    args_for_file = showmap_args + [input_file_path]
     showmap_result = self.run_and_wait(
-        additional_args=showmap_args,
-        input_data=engine_common.read_data_from_file(input_file_path),
+        additional_args=args_for_file,
         # TODO(metzman): Set a more reasonable per-file timeout. This is a must
         # to make timeouts smarter for afl-fuzz.
         timeout=self.merge_timeout,
@@ -1016,6 +1064,7 @@ class AflRunnerCommon(object):
     for match in re.finditer(self.SHOWMAP_REGEX, showmap_output):
       d = match.groupdict()
       features.add((int(d['guard']), int(d['hit_count'])))
+
     return frozenset(features), False
 
   def merge_corpus(self):
@@ -1027,7 +1076,7 @@ class AflRunnerCommon(object):
       del os.environ[constants.STDERR_FILENAME_ENV_VAR]
     except KeyError:
       pass
-    self._executable_path = self.afl_showmap_path
+    self.set_afl_showmap_executable()
     # Hack around minijail.
     showmap_args = self._fuzz_args
     showmap_args[-1] = '1'
@@ -1040,7 +1089,7 @@ class AflRunnerCommon(object):
     self.remove_arg(showmap_args, constants.QUEUE_OLD_STRATEGY_FLAG)
     self.remove_arg(showmap_args, constants.SCHEDULER_FLAG)
     self.remove_arg(showmap_args, constants.CMPLOG_FLAG)
-
+    self.remove_arg(showmap_args, constants.FUZZING_TIMEOUT_FLAG)
     # Replace -o argument.
     if environment.get_value('USE_MINIJAIL'):
       showmap_output_path = '/' + self.SHOWMAP_FILENAME
@@ -1133,7 +1182,6 @@ class AflRunnerCommon(object):
 
     return new_units_generated, new_units_added, corpus_size
 
-
 class AflRunner(AflRunnerCommon, new_process.UnicodeProcessRunner):
   """Afl runner."""
 
@@ -1150,6 +1198,217 @@ class AflRunner(AflRunnerCommon, new_process.UnicodeProcessRunner):
 
     new_process.ProcessRunner.__init__(self, self.afl_fuzz_path)
 
+class AflAndroidRunner(AflRunnerCommon, new_process.UnicodeProcessRunner):
+  """Afl Android runner"""
+
+  def __init__(self,
+      target_path,
+      config,
+      testcase_file_path,
+      input_directory,
+      timeout=None,
+      afl_tools_path=None,
+      strategy_dict=None):
+    super().__init__(target_path, config, testcase_file_path, input_directory,
+                     timeout, afl_tools_path, strategy_dict)
+
+    afl_fuzz_path = android.util.get_device_path(self.afl_fuzz_path)
+    new_process.ProcessRunner.__init__(self, executable_path=android.adb.get_adb_path())
+
+    self._showmap_output_path = "/data/fuzz/showmap_output"
+    self._showmap_results_dir = environment.get_root_directory() + "/tmp/showmap_results"
+
+  @property
+  def afl_output(self):
+    """Don't create the object until we need it, since it isn't used for
+    reproducing testcases."""
+
+    if self._afl_output is None:
+      self._afl_output = AflAndroidFuzzOutputDirectory()
+    return self._afl_output
+
+  #TODO is there a better way to set exe ?
+  def set_run_single_testcase_executable(self):
+    self._executable_path = android.adb.get_adb_path()
+
+    afl_target_path_device = android.util.get_device_path(self.target_path)
+    device_stderr_file_path = android.util.get_device_path(self.stderr_file_path)
+
+    self._default_args = [
+        "shell",
+        "AFL_SKIP_CPUFREQ=1",
+        constants.FAST_CAL_ENV_VAR + "=1",
+        constants.IGNORE_UNKNOWN_ENVS_ENV_VAR+ "=1",
+        constants.SKIP_CRASHES_ENV_VAR + "=1",
+        constants.SKIP_CPUFREQ_ENV_VAR + "=1",
+        constants.BENCH_UNTIL_CRASH_ENV_VAR + "=1",
+        constants.STDERR_FILENAME_ENV_VAR + "=" + device_stderr_file_path,
+        afl_target_path_device
+    ]
+
+  def set_afl_fuzz_executable(self):
+    self._executable_path = android.adb.get_adb_path()
+
+    afl_fuzz_path_device = android.util.get_device_path(self.afl_fuzz_path)
+    device_stderr_file_path = android.util.get_device_path(self.stderr_file_path)
+
+    self._default_args = [
+        "shell",
+        "AFL_SKIP_CPUFREQ=1",
+        constants.FORKSRV_INIT_TMOUT_ENV_VAR + "=" + str(constants.FORKSERVER_TIMEOUT),
+        constants.FAST_CAL_ENV_VAR + "=1",
+        constants.IGNORE_UNKNOWN_ENVS_ENV_VAR+ "=1",
+        constants.SKIP_CRASHES_ENV_VAR + "=1",
+        constants.SKIP_CPUFREQ_ENV_VAR + "=1",
+        constants.BENCH_UNTIL_CRASH_ENV_VAR + "=1",
+        constants.STDERR_FILENAME_ENV_VAR + "=" + device_stderr_file_path,
+        afl_fuzz_path_device
+    ]
+
+  def set_afl_showmap_executable(self):
+    self._executable_path = android.adb.get_adb_path()
+
+    afl_showmap_path_device = android.util.get_device_path(self.afl_showmap_path)
+    self._default_args = ["shell", afl_showmap_path_device]
+
+  def _copy_local_directories_to_device(self, local_directories):
+    """Copies local directories to device."""
+    for local_directory in sorted(set(local_directories)):
+      self._copy_local_directory_to_device(local_directory)
+
+  def _copy_local_directory_to_device(self, local_directory):
+    """Copy local directory to device."""
+    device_directory = android.util.get_device_path(local_directory)
+    android.adb.remove_directory(device_directory, recreate=True)
+    android.adb.copy_local_directory_to_remote(local_directory,
+                                               device_directory)
+
+  def _copy_local_directories_from_device(self, local_directories):
+    """Copies directories from device to local."""
+    for local_directory in sorted(set(local_directories)):
+      device_directory = android.util.get_device_path(local_directory)
+      shell.remove_directory(local_directory, recreate=True)
+
+      android.adb.copy_remote_directory_to_local(device_directory,
+                                                 local_directory)
+
+  """
+  def afl_setup(self):
+    remove_path(self.stderr_file_path)
+    android.adb.remove_file(android.util.get_device_path(self.stderr_file_path))
+  """
+
+  def run_single_testcase(self, testcase_path):
+    """Runs a single testcase.
+    Args:
+      testcase_path: Path to testcase to be run.
+    Returns:
+      A new_process.ProcessResult.
+    """
+    self.set_run_single_testcase_executable()
+
+    assert not testcase_path.isdigit(), ('We don\'t want to specify number of'
+                                         ' executions by accident.')
+
+    self.afl_setup()
+    result = self.run_and_wait(additional_args=[testcase_path])
+    if result.return_code not in [0, 1, -6]:
+      logs.log_error(
+          'AFL target exited with abnormal exit code: %s.' % result.return_code,
+          output=result.output)
+
+    return result
+
+  def get_file_features(self, input_file_path, showmap_args):
+    """Get the features (edge hit counts) of |input_file_path| using
+    afl-showmap."""
+    # TODO(metzman): Figure out if we should worry about CPU affinity errors
+    # here.
+
+    #TODO this needs to be a script
+    #push file onto device
+
+    filename = os.path.basename(input_file_path)
+    intput_file_showmap_results_file = self._showmap_results_dir + "/" + filename
+    showmap_output = engine_common.read_data_from_file(intput_file_showmap_results_file)
+
+    features = set()
+    for match in re.finditer(self.SHOWMAP_REGEX, showmap_output):
+      d = match.groupdict()
+      features.add((int(d['guard']), int(d['hit_count'])))
+
+    return frozenset(features), False
+
+  def fuzz(self):
+
+    self.set_afl_fuzz_executable()
+
+    self.initial_max_total_time = (
+        get_fuzz_timeout(
+            self.strategies.is_mutations_run, full_timeout=self.timeout) -
+        self.AFL_CLEAN_EXIT_TIME - self.SIGTERM_WAIT_TIME)
+
+    fuzzer_directory = os.path.dirname(os.path.realpath(self.target_path))
+    self._copy_local_directories_to_device([self.afl_input.input_directory, fuzzer_directory])
+
+    #set fuzz_args
+    device_input_dir = android.util.get_device_path(self.afl_input.input_directory)
+    device_output_dir = android.util.get_device_path(self.afl_output.output_directory)
+    device_target_path = android.util.get_device_path(self.target_path)
+
+    android.adb.create_directory_if_needed(device_output_dir)
+
+    actual_timeout = self.timeout - int(self.AFL_CLEAN_EXIT_TIME
+                                        + self.SIGTERM_WAIT_TIME
+                                        + self.ON_DEVICE_FUZZING_TIME_DIFF)
+
+    actual_timeout = 10
+    #TODO dont hardcode actual_timeout
+    self._fuzz_args = self.generate_afl_args(afl_input=device_input_dir,
+                                             afl_output=device_output_dir,
+                                             additional_args=[constants.FUZZING_TIMEOUT_FLAG + str(actual_timeout)],
+                                             target_path=device_target_path)
+
+
+    self.do_offline_mutations()
+
+    fuzz_result = self.run_afl_fuzz(self._fuzz_args)
+
+    #TODO CORY output_p should be set better.
+    #TODO CORY gen_file_feature_script_path should be set better
+    #TODO CORY update showmap_test_path name (maybe all names?)
+    #TODO get const value for /data/fuzz
+    #TODO CORY are all these set correctly? Is there a better way?
+
+    showmap_test_path = android.util.get_device_path(self.afl_showmap_path)
+    corpus = android.util.get_device_path(self.afl_output.queue)
+    fuzzer_p = android.util.get_device_path(self.target_path)
+    output_p = android.util.get_device_path(self._showmap_results_dir)
+    seed_p = device_input_dir
+
+    #TODO should these paths be better ?
+    script_dest = "/data/fuzz/run.sh"
+    gen_file_features_script_path = environment.get_root_directory() + "/src/clusterfuzz/_internal/scripts/create_file_features_showmap.sh"
+
+    #push script to device and update chmod
+    #TODO CORY set run.sh better
+    android.adb.copy_local_file_to_remote(gen_file_features_script_path, script_dest)
+    #TODO CORY can I set with less permisssions? Does it even matter?
+    #TODO update /data/fuzz/run.sh path to use variable
+    android.adb.run_shell_command("chmod 0777 /data/fuzz/run.sh", root=True)
+    android.adb.run_shell_command("%s --showmap_path %s --fuzzer_path %s --corpus_path %s --output_path %s --seed_path %s"
+                                  % (script_dest, showmap_test_path, fuzzer_p, corpus, output_p, seed_p),
+                                  root=True,
+                                  log_output=True)
+
+    #copy output to local
+    self._copy_local_directories_from_device([self.afl_output.output_directory, self._showmap_results_dir])
+    logs.log("Copying file to local $$$$$$$$$$$$$$$$$$$$$$$$$$$$$$")
+    logs.log("Copying file to local $$$$$$$$$$$$$$$$$$$$$$$$$$$$$$")
+    import time
+    time.sleep(1)
+    android.adb.copy_remote_file_to_local(android.util.get_device_path(self.stderr_file_path), self.stderr_file_path)
+    return fuzz_result
 
 class UnshareAflRunner(new_process.UnshareProcessRunnerMixin, AflRunner):
   """AFL runner which unshares."""
@@ -1218,8 +1477,9 @@ class MinijailAflRunner(AflRunnerCommon, new_process.UnicodeProcessRunnerMixin,
       minijail_afl_output = self._get_or_create_chroot_binding(
           self.afl_output.output_directory)
 
-    return super().generate_afl_args(minijail_afl_input, minijail_afl_output,
-                                     mem_limit)
+    return super().generate_afl_args(afl_input=minijail_afl_input,
+                                     afl_output=minijail_afl_output,
+                                     mem_limit=mem_limit)
 
   @property
   def stderr_file_path(self):
@@ -1457,14 +1717,18 @@ def prepare_runner(fuzzer_path,
     if environment.get_value('USE_UNSHARE'):
       runner_class = UnshareAflRunner
     else:
-      runner_class = AflRunner
+      if environment.is_android():
+        runner_class = AflAndroidRunner
+      else:
+        runner_class = AflRunner
 
+    #TODO CORY fix timeout value
     runner = runner_class(
         fuzzer_path,
         config,
         testcase_file_path,
         input_directory,
-        timeout=timeout,
+        timeout=60,
         strategy_dict=strategy_dict)
 
   # Make sure afl won't exit because of bad sanitizer options.

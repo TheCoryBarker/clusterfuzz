@@ -1538,6 +1538,8 @@ class FuzzingSession(object):
       result, current_fuzzer_metadata, fuzzing_strategies = run_engine_fuzzer(
           engine_impl, self.fuzz_target.binary, sync_corpus_directory,
           self.testcase_directory)
+
+      logs.log("### GOT THE RESULT !!!")
       fuzzer_metadata.update(current_fuzzer_metadata)
 
       # Prepare stats.
@@ -1554,9 +1556,12 @@ class FuzzingSession(object):
           crash_result.get_stacktrace(), return_code)
       testcase_manager.upload_log(log, log_time)
 
+      logs.log("### UPLOADING CRASHES APPEARENTLY !!!")
       for crash in result.crashes:
+        logs.log("### CRASH #1 (and only I think " + str(crash))
         testcase_manager.upload_testcase(crash.input_path, log_time)
 
+      logs.log("### Thats all the crashes !!!")
       add_additional_testcase_run_data(testcase_run,
                                        self.fuzz_target.fully_qualified_name(),
                                        self.job_type, revision)
@@ -1828,6 +1833,7 @@ class FuzzingSession(object):
 
     engine_impl = engine.get(self.fuzzer.name)
 
+    logs.log("## doing engine fuzzing !!!")
     if engine_impl:
       crashes, fuzzer_metadata = self.do_engine_fuzzing(engine_impl)
 
@@ -1839,6 +1845,8 @@ class FuzzingSession(object):
       fuzzer_metadata, testcase_file_paths, testcases_metadata, crashes = (
           self.do_blackbox_fuzzing(self.fuzzer, fuzzer_directory,
                                    self.job_type))
+
+    logs.log("### totally done with engine fuzzing !!!")
 
     if crashes is None:
       # Error occurred in generate_blackbox_testcases.
@@ -1865,6 +1873,7 @@ class FuzzingSession(object):
 
     # Process and save crashes to datastore.
     bot_name = environment.get_value('BOT_NAME')
+    logs.log("### PROCESSing crashes -- this is where we verify crashes I guess")
     new_crash_count, known_crash_count, processed_groups = process_crashes(
         crashes=crashes,
         context=Context(

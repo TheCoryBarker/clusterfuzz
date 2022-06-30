@@ -17,7 +17,7 @@ from clusterfuzz._internal.bot.init_scripts import init_runner
 from clusterfuzz._internal.platforms import android
 from clusterfuzz._internal.system import environment
 
-TIME_SINCE_REBOOT_MIN_THRESHOLD = 30 * 60  # 30 minutes.
+TIME_SINCE_REBOOT_MIN_THRESHOLD = 30000 * 60  # 30 minutes.
 
 
 def run():

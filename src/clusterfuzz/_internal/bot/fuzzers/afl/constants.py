@@ -38,6 +38,8 @@ SCHEDULER_FLAG = '-p'
 
 CMPLOG_FLAG = '-c'
 
+FUZZING_TIMEOUT_FLAG = '-V'
+
 # AFL CMPLOG suboptions.
 CMPLOG_ARITH = 'A'
 

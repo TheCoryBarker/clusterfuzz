@@ -319,6 +319,7 @@ class ProcessRunner(object):
     if extra_env is not None:
       env.update(extra_env)
 
+    #logs.log("### ENV = " + str(env))
     return ChildProcess(
         subprocess.Popen(
             command,
@@ -371,6 +372,7 @@ class ProcessRunner(object):
     Returns:
       A tuple of (return code, output, time process ran for, or None on timeout)
     """
+
     process = self.run(
         additional_args,
         max_stdout_len=max_stdout_len,
@@ -380,6 +382,7 @@ class ProcessRunner(object):
         stderr=stderr,
         **popen_args)
 
+    logs.log("#### PROCESS COMMAND : " + str(vars(process)))
     start_time = time.time()
 
     if not timeout:
@@ -395,6 +398,7 @@ class ProcessRunner(object):
         terminate_wait_time=terminate_wait_time)
     result.command = process.command
 
+    #logs.log("### RUN RESULT: " + str(vars(result)))
     return result
 
 

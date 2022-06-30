@@ -682,8 +682,8 @@ def run_shell_command(cmd,
 
   return run_command(
       full_cmd,
-      log_output=log_output,
-      log_error=log_error,
+      log_output=True,
+      log_error=True,
       timeout=timeout,
       recover=recover)
 
