@@ -1538,6 +1538,7 @@ class FuzzingSession(object):
       result, current_fuzzer_metadata, fuzzing_strategies = run_engine_fuzzer(
           engine_impl, self.fuzz_target.binary, sync_corpus_directory,
           self.testcase_directory)
+
       fuzzer_metadata.update(current_fuzzer_metadata)
 
       # Prepare stats.
@@ -1839,6 +1840,7 @@ class FuzzingSession(object):
       fuzzer_metadata, testcase_file_paths, testcases_metadata, crashes = (
           self.do_blackbox_fuzzing(self.fuzzer, fuzzer_directory,
                                    self.job_type))
+
 
     if crashes is None:
       # Error occurred in generate_blackbox_testcases.

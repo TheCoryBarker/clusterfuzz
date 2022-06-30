@@ -147,7 +147,7 @@ class Engine(engine.Engine):
     return engine.ReproduceResult(command, return_code, time_executed, output)
 
   def minimize_corpus(self, target_path, arguments, input_dirs, output_dir,
-                      reproducers_dir, max_time):
+      reproducers_dir, max_time):
     """Optional (but recommended): run corpus minimization.
 
     Args:

@@ -215,6 +215,7 @@ class LibFuzzerCommon(object):
     ])
 
     additional_args.extend(corpus_directories)
+
     return self.run_and_wait(
         additional_args=additional_args,
         timeout=self.get_total_timeout(fuzz_timeout),

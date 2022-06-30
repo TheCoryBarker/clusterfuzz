@@ -371,6 +371,7 @@ class ProcessRunner(object):
     Returns:
       A tuple of (return code, output, time process ran for, or None on timeout)
     """
+
     process = self.run(
         additional_args,
         max_stdout_len=max_stdout_len,
